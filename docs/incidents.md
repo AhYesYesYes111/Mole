@@ -31,6 +31,13 @@ When a review skill, its prompt or the model running it changes, rerun it on the
 at `<Fixed>^` and record which rows it finds (`.claude/skills/weekly-audit`, Phase 3). `Introduced` is a commit only
 when it was confirmed by reading the history, otherwise `unknown`.
 
+## Local desktop fixes awaiting a commit
+
+| Reported | Surface | Symptom and coverage | Earliest layer | Catcher |
+|---|---|---|---|---|
+| 2026-11-21 | Strata Analyze | Whole-disk scans and tile navigation could prompt for Apple Music access. The exact system request was not logged. Isolated fixtures reproduce traversal of Music service stores outside the home Music folder and exercise cached drill-down and the folder picker's initial location. | unit | `native/MoleDesktop/Tests/WholeDiskTests.swift` (`testMusicBoundaries`) |
+| 2026-11-21 | Strata Analyze | A live size-rank crossover swapped entire treemap regions; existing splits must retain their sides and axes while their areas follow the current byte counts, including when the top twelve change membership. | unit | `native/MoleDesktop/Tests/TreemapTests.swift` (`testLivePartitions`) |
+
 ## Incidents
 
 | ID | Reported | Symptom | Introduced | Fixed | Layer | Caught by |
