@@ -1538,8 +1538,10 @@ install_files() {
                     report_config_copy_failure "$CONFIG_DIR/bin"
                     return 1
                 fi
-                for file in "$CONFIG_DIR/bin/"*; do
-                    [[ -e "$file" ]] && chmod +x "$file"
+                local file
+                for file in "${bin_files[@]}"; do
+                    [[ -f "$file" && ! -L "$file" ]] || continue
+                    chmod +x "$CONFIG_DIR/bin/${file##*/}" || return 1
                 done
             fi
         fi
@@ -1840,7 +1842,7 @@ perform_update() {
         exit 1
     fi
 
-    if [[ "$installed_version" == "$target_version" ]]; then
+    if [[ "$installed_version" == "$target_version" && ! -e "$CONFIG_DIR/.helper_install_incomplete" ]]; then
         echo -e "${GREEN}${ICON_SUCCESS}${NC} Already on latest version, $installed_version"
         exit 0
     fi

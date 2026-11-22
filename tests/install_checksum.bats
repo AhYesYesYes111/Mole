@@ -44,6 +44,28 @@ EOF
 	[ "$failed" -eq 0 ]
 }
 
+@test "same-version update retries incomplete helpers under the install lock" {
+	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -eu
+mole_source_installer
+CONFIG_DIR="$HOME/config"
+INSTALL_DIR="$HOME/install"
+touch "$CONFIG_DIR/.helper_install_incomplete"
+check_requirements() { :; }
+homebrew_owns_mole() { return 1; }
+get_installed_version() { echo 1.2.3; }
+get_source_version() { echo 1.2.3; }
+resolve_source_dir() { :; }
+create_directories() { :; }
+acquire_install_lock() { echo locked >> "$HOME/attempt"; }
+install_files() { echo retry >> "$HOME/attempt"; return 1; }
+(perform_update) && exit 1
+[[ "$(cat "$HOME/attempt")" == $'locked\nretry' ]] || exit 1
+[[ -f "$CONFIG_DIR/.helper_install_incomplete" ]] || exit 1
+EOF
+	[ "$status" -eq 0 ] || { echo "$output"; return 1; }
+}
+
 @test "quiet installer update with a custom prefix finishes and writes its receipt" {
 	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
@@ -631,11 +653,15 @@ printf '%s\n' 'new lib' > "$SOURCE_DIR/lib/manage/remove.sh"
 printf '%s\n' 'stale bin' > "$CONFIG_DIR/bin/clean.sh"
 printf '%s\n' 'stale lib' > "$CONFIG_DIR/lib/manage/remove.sh"
 chmod 444 "$CONFIG_DIR/bin/clean.sh" "$CONFIG_DIR/lib/manage/remove.sh"
+touch "$CONFIG_DIR/bin/private-data"
+chmod 600 "$CONFIG_DIR/bin/private-data"
 resolve_source_dir() { :; }
 needs_sudo() { return 1; }
 maybe_sudo() { "$@"; }
 download_binary() { return 0; }
 install_files > /dev/null 2>&1 || true
+[[ "$(/usr/bin/stat -f %Lp "$CONFIG_DIR/bin/private-data")" == 600 ]] || exit 1
+[[ -x "$CONFIG_DIR/bin/clean.sh" ]] || exit 1
 [[ "$(cat "$CONFIG_DIR/bin/clean.sh")" == "new bin" ]] || { echo "bin file stayed stale"; exit 1; }
 [[ "$(cat "$CONFIG_DIR/lib/manage/remove.sh")" == "new lib" ]] || { echo "lib file stayed stale"; exit 1; }
 EOF

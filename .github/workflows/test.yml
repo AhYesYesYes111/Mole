@@ -118,6 +118,11 @@ jobs:
           source lib/core/common.sh
           echo "✓ Successfully loaded on ${{ matrix.os }}"
 
+      - name: Run Strata native tests
+        run: |
+          python3 native/MoleDesktop/Tests/test_cleanup.py
+          python3 native/MoleDesktop/Tests/test_monitoring.py
+
       - name: Run core bats subset
         env:
           MOLE_TEST_NO_AUTH: "1"

@@ -27,6 +27,10 @@ import (
 // must release its subprocesses and workers before it can compete for I/O.
 const liveScanCancellationBudget = 250 * time.Millisecond
 
+func storeOverviewSize(path string, size int64) error {
+	return storeOverviewMeasurement(path, size, false)
+}
+
 func resetOverviewSnapshotForTest() {
 	overviewSnapshotMu.Lock()
 	overviewSnapshotCache = nil
@@ -2367,7 +2371,7 @@ func TestManualRefreshBypassesNestedSubdirCache(t *testing.T) {
 	}
 }
 
-func TestCacheBypassSkipsHomeLibraryOverviewSnapshot(t *testing.T) {
+func TestHomeLibraryScanIgnoresOverviewSnapshot(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	resetOverviewSnapshotForTest()
@@ -2393,7 +2397,7 @@ func TestCacheBypassSkipsHomeLibraryOverviewSnapshot(t *testing.T) {
 		limiter := newScanLimiter(1)
 		result, err := scanLiveTarget(
 			ctx,
-			liveScanTarget{name: "Library", path: library, kind: liveScanTargetHomeLibrary},
+			liveScanTarget{name: "Library", path: library, kind: liveScanTargetDirectory},
 			make(chan fileEntry, maxLargeFiles*2),
 			limiter,
 			&filesScanned,
@@ -2409,8 +2413,8 @@ func TestCacheBypassSkipsHomeLibraryOverviewSnapshot(t *testing.T) {
 		return result
 	}
 
-	if got := scanTarget(scanCacheReuse).TotalSize; got != 1 {
-		t.Fatalf("expected reuse policy to return snapshot size 1, got %d", got)
+	if got := scanTarget(scanCacheReuse).TotalSize; got <= 1 {
+		t.Fatalf("expected the live target to measure the full Library, got %d", got)
 	}
 	if got := scanTarget(scanCacheBypass).TotalSize; got <= 1 {
 		t.Fatalf("expected bypass policy to scan live Library size, got %d", got)
@@ -2435,8 +2439,8 @@ func TestCacheBypassSkipsHomeLibraryOverviewSnapshot(t *testing.T) {
 		return 0
 	}
 
-	if got := scanHome(scanCacheReuse); got != 1 {
-		t.Fatalf("expected concurrent reuse policy to return snapshot size 1, got %d", got)
+	if got := scanHome(scanCacheReuse); got <= 1 {
+		t.Fatalf("expected the concurrent scan to measure the full Library, got %d", got)
 	}
 	if got := scanHome(scanCacheBypass); got <= 1 {
 		t.Fatalf("expected concurrent bypass policy to scan live Library size, got %d", got)
@@ -2772,6 +2776,36 @@ func TestScanningViewShowsSpinnerDividerForPartiallySizedFolders(t *testing.T) {
 	}
 	if strings.Contains(fileRow, spinnerFrames[m.spinner]) {
 		t.Fatalf("expected non-scanning file row to keep static divider, got:\n%s", fileRow)
+	}
+}
+
+func TestFailedNavigationCannotDeleteParentItems(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HOME", root)
+	child := filepath.Join(root, "vanished")
+	m := newModel(root, false)
+	m.entries = []dirEntry{{Name: "vanished", Path: child, IsDir: true}}
+	m.entriesAll = m.entries
+	m.largeFilesAll = []fileEntry{{Name: "large", Path: filepath.Join(root, "large")}}
+	m.largeFiles = m.largeFilesAll
+	m.multiSelected[child] = true
+	m.largeMultiSelected[m.largeFiles[0].Path] = true
+	updated, scan := m.enterSelectedDir()
+	m = updated.(model)
+	updated, _ = m.update(runScanResultCmd(t, scan))
+	m = updated.(model)
+	if m.path != child || m.scanning || !strings.Contains(m.status, "Scan failed") {
+		t.Fatalf("did not reach failed child scan: %s %s", m.path, m.status)
+	}
+	if len(m.entriesAll)+len(m.entries)+len(m.largeFilesAll)+len(m.largeFiles)+len(m.multiSelected)+len(m.largeMultiSelected) != 0 {
+		t.Fatal("parent rows or selections survived navigation")
+	}
+	for _, large := range []bool{false, true} {
+		m.showLargeFiles = large
+		updated, _ := m.updateKey(tea.KeyMsg{Type: tea.KeyBackspace})
+		if next := updated.(model); next.deleteConfirm || next.deleteTarget != nil {
+			t.Fatal("could delete from an empty child view")
+		}
 	}
 }
 
@@ -4237,7 +4271,7 @@ func TestUnavailableEntryCannotBeSelectedForDeletion(t *testing.T) {
 }
 
 func TestOldSchemaSizesAreRejectedByEveryLoader(t *testing.T) {
-	for _, loader := range []string{"fresh", "stale", "overview-gob", "overview-json"} {
+	for _, loader := range []string{"fresh", "stale", "overview-json"} {
 		for _, version := range []int{5, 6, cacheSchemaVersion} {
 			t.Run(fmt.Sprintf("%s/schema%d", loader, version), func(t *testing.T) {
 				home := t.TempDir()
@@ -4282,8 +4316,6 @@ func TestOldSchemaSizesAreRejectedByEveryLoader(t *testing.T) {
 					_, err = loadCacheFromDisk(target)
 				case "stale":
 					_, err = loadStaleCacheFromDisk(target)
-				case "overview-gob":
-					_, _, err = loadOverviewCachedMeasurement(target)
 				case "overview-json":
 					_, _, err = loadStoredOverviewMeasurement(target)
 				}
@@ -4757,6 +4789,13 @@ func TestCompletedScanCacheWritesRemainCancelable(t *testing.T) {
 				m = updated.(model)
 			}
 			publication := m.cachePublications[root]
+			if !live {
+				// Loading a full directory snapshot must not republish its total as an overview.
+				if publication != nil || len(m.overviewSizeCache) != 0 {
+					t.Fatal("cached directory measurement leaked into the overview")
+				}
+				return
+			}
 			if publication == nil {
 				t.Fatal("completed scan wrote without a cancelable publication")
 			}
@@ -5356,5 +5395,31 @@ func TestOverviewSelectionAvoidsHiddenRowsAndEnterIgnoresThem(t *testing.T) {
 	got := entered.(model)
 	if cmd != nil || !got.inOverviewMode() || got.path != "/" {
 		t.Fatalf("enter opened hidden overview row: cmd=%t overview=%t path=%s", cmd != nil, got.inOverviewMode(), got.path)
+	}
+}
+
+func TestOldDownloadsOverviewIgnoresFullDirectoryCache(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	resetOverviewSnapshotForTest()
+	t.Cleanup(resetOverviewSnapshotForTest)
+	dir := filepath.Join(home, "Downloads")
+	old := filepath.Join(dir, "old")
+	writeFileWithSize(t, old, 4096)
+	writeFileWithSize(t, filepath.Join(dir, "new"), 8192)
+	stamp := time.Now().AddDate(-1, 0, 0)
+	if err := os.Chtimes(old, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveCacheToDisk(dir, scanResult{TotalFiles: 2, TotalSize: 12288}); err != nil {
+		t.Fatal(err)
+	}
+	rows := measureOverviewEntriesForJSON([]dirEntry{{Path: dir}}, map[string]bool{dir: true})
+	if rows[0].Size != 4096 {
+		t.Fatalf("old Downloads row got %d bytes", rows[0].Size)
+	}
+	prefetchOverviewCache(context.Background(), map[string]*scanPublication{dir: newScanPublication(context.Background(), nil)})
+	if size, err := loadStoredOverviewSize(dir); err != nil || size != 4096 {
+		t.Fatalf("prefetched old Downloads size = %d, %v", size, err)
 	}
 }

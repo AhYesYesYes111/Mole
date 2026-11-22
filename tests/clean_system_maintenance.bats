@@ -12,6 +12,15 @@ setup_file() {
     mkdir -p "$HOME"
 }
 
+# The sourced cleanup calls these two fixture overrides.
+# shellcheck disable=SC2329
+load_brew_with_fixture_scope() {
+    source "$PROJECT_ROOT/lib/clean/brew.sh"
+    run_scoped_brew_cleanup() { run_with_timeout "$1" brew cleanup --prune=30; }
+    brew_cleanup_roots() { printf '%s\n' "$HOME/test-brew" complete; }
+}
+export -f load_brew_with_fixture_scope
+
 teardown_file() {
     mole_test_teardown_home
 }
@@ -949,7 +958,7 @@ EOF
     run /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/clean/brew.sh"
+load_brew_with_fixture_scope
 
 mkdir -p "$HOME/.cache/mole"
 rm -f "$HOME/.cache/mole/brew_last_cleanup"
@@ -997,7 +1006,7 @@ EOF
     run /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/clean/brew.sh"
+load_brew_with_fixture_scope
 
 mkdir -p "$HOME/.cache/mole" "$HOME/Library/Caches/Homebrew"
 rm -f "$HOME/.cache/mole/brew_last_cleanup"
@@ -1038,7 +1047,7 @@ EOF
     run /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/clean/brew.sh"
+load_brew_with_fixture_scope
 
 mkdir -p "$HOME/.cache/mole"
 rm -f "$HOME/.cache/mole/brew_last_cleanup"
@@ -1081,7 +1090,7 @@ EOF
     run env HOMEBREW_COLOR=1 /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/clean/brew.sh"
+load_brew_with_fixture_scope
 
 mkdir -p "$HOME/.cache/mole"
 rm -f "$HOME/.cache/mole/brew_last_cleanup"
@@ -1134,7 +1143,7 @@ EOF
     run /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/clean/brew.sh"
+load_brew_with_fixture_scope
 
 mkdir -p "$HOME/.cache/mole"
 rm -f "$HOME/.cache/mole/brew_last_cleanup"
@@ -1168,7 +1177,7 @@ EOF
         /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/clean/brew.sh"
+load_brew_with_fixture_scope
 
 TEST_BREW_PREFIX="$HOME/homebrew-interrupt"
 TEST_BREW_CELLAR="$TEST_BREW_PREFIX/Cellar"
@@ -1223,7 +1232,7 @@ EOF
     run /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/clean/brew.sh"
+load_brew_with_fixture_scope
 
 mkdir -p "$HOME/.cache/mole" "$HOME/Library/Caches/Homebrew"
 rm -f "$HOME/.cache/mole/brew_last_cleanup"
@@ -1282,7 +1291,7 @@ EOF
     run /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/clean/brew.sh"
+load_brew_with_fixture_scope
 
 TEST_BREW_PREFIX="$HOME/homebrew"
 TEST_BREW_CELLAR="$TEST_BREW_PREFIX/Cellar"
@@ -1340,7 +1349,7 @@ EOF
     run /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/clean/brew.sh"
+load_brew_with_fixture_scope
 
 TEST_BREW_PREFIX="$HOME/homebrew-removed"
 TEST_BREW_CELLAR="$TEST_BREW_PREFIX/Cellar"
@@ -1386,7 +1395,7 @@ EOF
     run /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/clean/brew.sh"
+load_brew_with_fixture_scope
 
 TEST_BREW_PREFIX="$HOME/homebrew-external"
 TEST_BREW_CELLAR="$TEST_BREW_PREFIX/Cellar"
@@ -1521,7 +1530,7 @@ EOF
     run /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/clean/brew.sh"
+load_brew_with_fixture_scope
 
 calls="$HOME/brew_dry_run_calls.log"
 : > "$calls"
@@ -1633,7 +1642,7 @@ EOF
     run /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/clean/brew.sh"
+load_brew_with_fixture_scope
 
 rm -f "$HOME/.cache/mole/brew_last_cleanup"
 DRY_RUN=true
@@ -3119,4 +3128,127 @@ EOF2
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     [[ "$output" == "rc=1 bound=" ]] || { echo "$output"; return 1; }
     [[ -f "$HOME/swap-target/access.log" ]]
+}
+
+@test "Homebrew cleanup checks configured and physical roots before preview and removal" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'SCRIPT'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/brew.sh"
+fixture=$(mktemp -d "$HOME/brew-scope.XXXXXX")
+export BREW_SCOPE_FIXTURE="$fixture"
+mkdir -p "$fixture/prefix" "$fixture/storage" "$fixture/ruby"
+ln -s "$fixture/storage" "$fixture/cache"
+# Load just the runtime constants via brew's normal Ruby expression.
+cat > "$fixture/ruby/keg.rb" <<'RUBY'
+require "pathname"
+root = Pathname(ENV.fetch("BREW_SCOPE_FIXTURE"))
+HOMEBREW_PREFIX = root/"prefix"
+HOMEBREW_CELLAR = root/"custom-cellar"
+HOMEBREW_REPOSITORY = root/"repo"
+HOMEBREW_LIBRARY = HOMEBREW_REPOSITORY/"Library"
+HOMEBREW_CACHE = root/"cache"
+HOMEBREW_LOGS = root/"logs"
+HOMEBREW_LOCKS = root/"locks"
+HOMEBREW_TEMP_CELLAR = root/"staging/cellar"
+HOMEBREW_TEMP_CASKROOM = root/"staging/caskroom"
+module Keg
+  def self.prefix_subdirectories
+    [HOMEBREW_PREFIX/"share"]
+  end
+end
+RUBY
+brew() {
+    case "$1" in
+        ruby)
+            [[ "$2" == -e ]] || return 1
+            if [[ "$scenario" == unavailable ]]; then echo "$fixture"; return 1; fi
+            /usr/bin/ruby -I "$fixture/ruby" -e "$3" ;;
+        cleanup|autoremove) echo "$*" >> "$fixture/actions" ;;
+        *) return 1 ;;
+    esac
+}
+run_with_timeout() { shift; "$@"; }
+run_scoped_brew_cleanup() { brew cleanup --prune=30; }
+brew_cleanup_ran_recently() { return 1; }
+for DRY_RUN in true false; do
+    for scenario in allowed cellar physical staged unavailable; do
+        : > "$fixture/actions"
+        case "$scenario" in
+            cellar) WHITELIST_PATTERNS=("$fixture/custom-cellar/node") ;;
+            physical) WHITELIST_PATTERNS=("$fixture/storage/protect") ;;
+            staged) WHITELIST_PATTERNS=("$fixture/staging/caskroom/keep") ;;
+            *) WHITELIST_PATTERNS=("$fixture/unrelated") ;;
+        esac
+        clean_homebrew
+        if [[ "$scenario" == allowed ]]; then
+            grep -q '^cleanup --prune=30' "$fixture/actions" || exit 1
+        else
+            [[ ! -s "$fixture/actions" ]] || exit 1
+        fi
+    done
+done
+SCRIPT
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+}
+
+@test "Homebrew preview signals stop every later owner command" {
+    run /bin/bash --noprofile --norc <<'SCRIPT'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+load_brew_with_fixture_scope
+brew_cleanup_ran_recently() { return 1; }
+run_with_timeout() { shift; "$@"; }
+brew() {
+    printf '%s\n' "$1" >> "$trace"
+    if [[ "$1" == "$interrupted" ]]; then return 130; fi
+    return 0
+}
+MOLE_CURRENT_COMMAND=clean
+trace=$(create_temp_file)
+for scenario in true:cleanup true:autoremove false:autoremove; do
+    DRY_RUN=${scenario%:*}
+    interrupted=${scenario#*:}
+    MOLE_CLEAN_CANCEL_STATUS=0
+    rc=0
+    : > "$trace"
+    clean_homebrew || rc=$?
+    [[ $rc == 130 && $MOLE_CLEAN_CANCEL_STATUS == 130 ]] || exit 1
+    [[ "$(tail -1 "$trace")" == "$interrupted" ]] || exit 1
+    if [[ "$interrupted" == cleanup ]]; then
+        [[ "$(cat "$trace")" == cleanup ]] || exit 1
+    fi
+done
+SCRIPT
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+}
+
+@test "Homebrew cleanup confines owner writes through a redirected subdirectory" {
+    if ! /usr/bin/sandbox-exec -p '(version 1)(allow default)' /usr/bin/true 2>/dev/null; then
+        skip "requires macOS sandbox-exec"
+    fi
+    run /bin/bash --noprofile --norc <<'SCRIPT'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/brew.sh"
+fixture=$(mktemp -d "$HOME/brew-confined.XXXXXX")
+mkdir -p "$fixture/pkg" "$fixture/outside" "$fixture/shim"
+export BREW_TEST_ROOT="$fixture/pkg"
+ln -s "$fixture/outside" "$BREW_TEST_ROOT/downloads"
+cat > "$fixture/shim/brew" <<'STUB'
+#!/bin/bash
+[[ "$*" == 'cleanup --prune=30' ]] || exit 2
+touch "$TMPDIR/owner-work" || exit 3
+touch "$BREW_TEST_ROOT/reached" || exit 3
+touch "$BREW_TEST_ROOT/downloads/unexpected"
+STUB
+chmod +x "$fixture/shim/brew"
+PATH="$fixture/shim:$PATH"
+_brew_cleanup_roots=("$BREW_TEST_ROOT")
+rc=0
+run_scoped_brew_cleanup 10 || rc=$?
+[[ -f "$BREW_TEST_ROOT/reached" && $rc -ne 0 ]] || exit 1
+[[ ! -e "$fixture/outside/unexpected" ]] || exit 1
+SCRIPT
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
 }

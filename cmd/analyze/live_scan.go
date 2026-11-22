@@ -25,7 +25,6 @@ type liveScanTargetKind int
 const (
 	liveScanTargetDirectory liveScanTargetKind = iota + 1
 	liveScanTargetFoldedDirectory
-	liveScanTargetHomeLibrary
 )
 
 type liveScanTarget struct {
@@ -146,8 +145,6 @@ func readLiveScanInitialEntries(root string, limiter *scanLimiter) (scanResult, 
 	}
 
 	isRootDir := root == "/"
-	home := os.Getenv("HOME")
-	isHomeDir := home != "" && root == home
 	rootDevice := scanDeviceOf(root)
 
 	entries := make([]dirEntry, 0, len(children))
@@ -209,9 +206,7 @@ func readLiveScanInitialEntries(root string, limiter *scanLimiter) (scanResult, 
 			}
 
 			targetKind := liveScanTargetDirectory
-			if isHomeDir && child.Name() == "Library" {
-				targetKind = liveScanTargetHomeLibrary
-			} else if shouldFoldDirWithPath(child.Name(), fullPath) {
+			if shouldFoldDirWithPath(child.Name(), fullPath) {
 				targetKind = liveScanTargetFoldedDirectory
 			}
 
@@ -467,14 +462,7 @@ func scanLiveTarget(ctx context.Context, target liveScanTarget, largeFileChan ch
 		return scanResult{}, err
 	}
 
-	switch target.kind {
-	case liveScanTargetHomeLibrary:
-		if cachePolicy == scanCacheReuse {
-			if cached, state, err := loadStoredOverviewMeasurement(target.path); err == nil && cached > 0 {
-				return scanResult{TotalSize: cached, State: state}, nil
-			}
-		}
-	case liveScanTargetFoldedDirectory:
+	if target.kind == liveScanTargetFoldedDirectory {
 		size, err := getDirectorySizeFromDuWithLimiter(ctx, target.path, limiter)
 		if ctx.Err() != nil {
 			return scanResult{}, ctx.Err()

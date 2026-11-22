@@ -81,6 +81,45 @@ EOF
     [[ "$output" != *"Trash"* ]]
 }
 
+@test "Trash totals include only successfully removed items and their measured bytes with logging disabled" {
+    local test_home="$BATS_TEST_TMPDIR/trash-totals"
+    mkdir -p "$test_home/.Trash"
+    dd if=/dev/zero of="$test_home/.Trash/payload" bs=1024 count=128 2> /dev/null
+    dd if=/dev/zero of="$test_home/.Trash/failed" bs=1024 count=32 2> /dev/null
+    touch "$test_home/.Trash/empty" "$test_home/.Trash/disappearing"
+    run env HOME="$test_home" MO_NO_OPLOG=1 /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/user.sh"
+DRY_RUN=false
+files_cleaned=0
+total_items=0
+total_size_cleaned=0
+expected_kb=$(get_path_size_kb "$HOME/.Trash/payload" "" readable)
+[[ "$expected_kb" -gt 0 ]] || exit 1
+is_path_whitelisted() {
+    # Model an item disappearing during the shared removal guard.
+    if [[ "$1" == "$HOME/.Trash/disappearing" && -f "$1" ]]; then
+        /bin/mv "$1" "$HOME/rescued"
+    fi
+    return 1
+}
+rm() {
+    if [[ "${*: -1}" == "$HOME/.Trash/failed" ]]; then
+        echo "failed" > "$HOME/failed-at-sink"
+        return 1
+    fi
+    /bin/rm "$@"
+}
+clean_trash
+[[ -f "$HOME/rescued" && -f "$HOME/failed-at-sink" && -f "$HOME/.Trash/failed" ]] || exit 1
+[[ ! -e "$HOME/.Trash/payload" && ! -e "$HOME/.Trash/empty" ]] || exit 1
+[[ "$files_cleaned" -eq 2 && "$total_items" -eq 1 && "$total_size_cleaned" -eq "$expected_kb" ]] || exit 1
+EOF
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"Trash · removed 2 items, 1 could not be removed"* ]] || return 1
+}
+
 @test "emptying a large Trash reports its count every 100 items" {
     local test_home="$HOME/trash-progress-home"
     mkdir -p "$test_home/.Trash"
@@ -94,7 +133,7 @@ set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/user.sh"
 is_path_whitelisted() { return 1; }
-safe_remove() { return 0; }
+safe_remove() { _MOLE_REMOVED_SIZE_KB=0; }
 update_inline_spinner_message() { echo "SPINNER:$1"; }
 clean_trash
 EOF
@@ -917,7 +956,7 @@ export -f osascript
 safe_remove() {
     local target="$1"
     /bin/rm -rf "$target"
-    return 0
+    _MOLE_REMOVED_SIZE_KB=0
 }
 
 safe_clean_guarded() {
@@ -967,7 +1006,7 @@ safe_remove() {
     local target="$1"
     [[ "$target" == *"/two.tmp" ]] && return 1
     rm -f "$target"
-    return 0
+    _MOLE_REMOVED_SIZE_KB=0
 }
 
 clean_trash
@@ -999,6 +1038,7 @@ is_path_whitelisted() { return 1; }
 debug_log() { :; }
 
 clean_trash
+[[ "$files_cleaned" -gt 0 && "$total_items" -eq 1 ]] || exit 1
 EOF
 
     [ "$status" -eq 0 ]
@@ -1104,7 +1144,7 @@ record_dry_run_cleanup_target() {
 }
 safe_remove() {
     printf '%s\n' "${1##*/}" >> "$HOME/removed"
-    return 0
+    _MOLE_REMOVED_SIZE_KB=0
 }
 
 for scenario in 124:0 1:0 130:1 143:1; do

@@ -1233,6 +1233,14 @@ git -C "$HOME/Other" add -f data/fixture.json
 touch "$HOME/Projects/web/package.json"
 ln -s "$other" "$HOME/Projects/web/.next/cache"
 git init -q "$HOME/Projects/web"
+# The protected directory must not even enter the Git index or cleanup planner.
+matches="$HOME/next-matches"
+index="$HOME/next-index"
+printf '%s\t%s\n' "$HOME/Projects" "$HOME/Projects/web/.next" > "$matches"
+project_cache_build_git_index "$matches" "$index" "$((SECONDS + 10))"
+[[ ! -s "$index" ]] || exit 1
+clean_project_cache_target() { echo "unexpected candidate: $*" >&2; return 42; }
+_process_project_cache_matches_indexed "$matches" || exit 1
 DRY_RUN=false
 clean_project_caches
 [[ -f "$other/fixture.json" ]] || exit 11

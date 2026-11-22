@@ -31,6 +31,19 @@ func TestCollectProxyFromEnvSupportsAllProxy(t *testing.T) {
 	}
 }
 
+func TestProxyDiagnosticsOmitUserinfo(t *testing.T) {
+	for raw, want := range map[string]string{
+		"https://user:secret@proxy.test:3128": "proxy.test:3128",
+		"https://user:secret@proxy.test:%zz":  "Unknown",
+	} {
+		proxy := collectProxyFromEnv(func(string) string { return raw })
+		data, err := json.Marshal(proxy)
+		if err != nil || !proxy.Enabled || proxy.Host != want || strings.Contains(string(data), "secret") {
+			t.Fatal("proxy diagnostics must contain only the parsed host or Unknown")
+		}
+	}
+}
+
 func TestCollectProxyFromScutilOutputPAC(t *testing.T) {
 	out := `
 <dictionary> {
